@@ -1,0 +1,33 @@
+{
+  "name": "superzug",
+  "description": "Private train ticket wallet",
+  "license": "0BSD",
+  "version": "57.0.15",
+  "main": "index.ts",
+  "dependencies": {
+    "@expo/vector-icons": "15.1.1",
+    "expo": "~57.0.13",
+    "expo-document-picker": "57.0.1",
+    "expo-secure-store": "57.0.1",
+    "expo-status-bar": "~57.0.1",
+    "postgres": "3.4.9",
+    "react": "19.2.3",
+    "react-dom": "19.2.8",
+    "react-native": "0.86.2",
+    "react-native-web": "0.21.2"
+  },
+  "devDependencies": {
+    "@types/bun": "1.3.14",
+    "@types/react": "~19.2.2",
+    "typescript": "~6.0.3"
+  },
+  "scripts": {
+    "start": "expo start",
+    "build": "expo export --platform web",
+    "server": "bun server/index.ts",
+    "typecheck": "tsc --noEmit",
+    "android": "expo start --android",
+    "ios": "expo start --ios",
+    "web": "expo start --web"
+  }
+}
