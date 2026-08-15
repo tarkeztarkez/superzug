@@ -12,6 +12,8 @@ type LiveTrip = { start_date: string; numbers: string[]; stop_times: { arrival?:
 type ExtractedTicket = Record<string, string | null | undefined>;
 
 let liveCache: { expires: number; trips: LiveTrip[] } | null = null;
+let staticGtfsExpires = 0;
+const staticGtfsCache = new Map<string, { platform?: string; track?: string }>();
 
 const json = (data: unknown, status = 200) => Response.json(data, { status });
 const sha256 = async (value: string) => Buffer.from(await crypto.subtle.digest("SHA-256", encoder.encode(value))).toString("hex");
@@ -73,6 +75,8 @@ function polishDate(value: Date) {
   return new Intl.DateTimeFormat("en-CA", { timeZone: "Europe/Warsaw", year: "numeric", month: "2-digit", day: "2-digit" }).format(value);
 }
 
+const trainNumber = (value: unknown) => String(value ?? "").match(/\d+/)?.[0] ?? "";
+
 async function enrichLive(rows: Record<string, any>[]) {
   const candidates = rows.filter((row) => row.train_number && row.departure_at && new Date(row.arrival_at ?? row.departure_at).getTime() > Date.now() - 3_600_000);
   if (!candidates.length) return;
@@ -87,7 +91,7 @@ async function enrichLive(rows: Record<string, any>[]) {
       const scheduled = new Date(row.departure_at);
       const numbers: string[] = String(row.train_number).match(/\d+/g) ?? [];
       const stop = liveCache.trips
-        .filter((item) => item.start_date === polishDate(scheduled) && item.numbers.some((value) => numbers.includes(value.replace(/\D/g, ""))))
+        .filter((item) => item.start_date === polishDate(scheduled) && item.numbers.some((value) => numbers.includes(trainNumber(value))))
         .flatMap((trip) => trip.stop_times.map((item) => ({ item, time: new Date(item.departure ?? item.arrival ?? 0) })))
         .filter(({ time }) => Number.isFinite(time.getTime()))
         .sort((a, b) => Math.abs(a.time.getTime() - scheduled.getTime()) - Math.abs(b.time.getTime() - scheduled.getTime()))[0];
@@ -98,6 +102,59 @@ async function enrichLive(rows: Record<string, any>[]) {
     }
   } catch (error) {
     console.error("live journey enrichment failed", error);
+  }
+  await enrichStaticGtfs(candidates.filter((row) => !row.platform || !row.track));
+}
+
+async function enrichStaticGtfs(rows: Record<string, any>[]) {
+  if (!rows.length) return;
+  try {
+    const zip = join(tmpdir(), "superzug-polish-trains.zip");
+    if (staticGtfsExpires < Date.now()) {
+      const response = await fetch(process.env.STATIC_GTFS_URL ?? "https://mkuran.pl/gtfs/polish_trains.zip");
+      if (!response.ok) throw new Error(`static GTFS returned ${response.status}`);
+      await writeFile(zip, new Uint8Array(await response.arrayBuffer()));
+      staticGtfsCache.clear();
+      staticGtfsExpires = Date.now() + 6 * 3_600_000;
+    }
+    const missing = rows.filter((row) => !staticGtfsCache.has(`${row.train_number}|${row.departure_at}`));
+    if (missing.length) {
+      const readZip = async (name: string) => {
+        const process = Bun.spawn(["unzip", "-p", zip, name], { stdout: "pipe", stderr: "ignore" });
+        const text = await new Response(process.stdout).text();
+        if (await process.exited) throw new Error(`Could not read ${name} from GTFS`);
+        return text;
+      };
+      const [calendar, trips, stopTimes] = await Promise.all([readZip("calendar_dates.txt"), readZip("trips.txt"), readZip("stop_times.txt")]);
+      for (const row of missing) {
+        const key = `${row.train_number}|${row.departure_at}`;
+        const departure = new Date(row.departure_at);
+        const date = polishDate(departure).replaceAll("-", "");
+        const services = new Set(calendar.split("\n").slice(1).map((line) => line.split(",")).filter(([day, , type]) => day === date && type?.trim() === "1").map(([, service]) => service));
+        const number = trainNumber(row.train_number);
+        const tripIds = new Set(trips.split("\n").slice(1).map((line) => line.split(",")).filter((parts) => services.has(parts[2] ?? "") && [parts[5], parts[8]].some((value) => trainNumber(value) === number)).map(([tripId]) => tripId));
+        const parts = new Intl.DateTimeFormat("en-GB", { timeZone: "Europe/Warsaw", hour: "2-digit", minute: "2-digit", hour12: false }).formatToParts(departure);
+        const scheduledMinutes = Number(parts.find((part) => part.type === "hour")?.value) * 60 + Number(parts.find((part) => part.type === "minute")?.value);
+        let stop: { platform?: string; track?: string; distance: number } | undefined;
+        for (const line of stopTimes.split("\n").slice(1)) {
+          const comma = line.indexOf(",");
+          if (comma < 0 || !tripIds.has(line.slice(0, comma))) continue;
+          const fields = line.split(",");
+          if (!fields[8] && !fields[9]) continue;
+          const [hour, minute] = (fields[4] || fields[3] || "0:0").split(":").map(Number);
+          const candidate = { platform: fields[8] || undefined, track: fields[9] || undefined, distance: Math.abs(hour * 60 + minute - scheduledMinutes) };
+          if (!stop || candidate.distance < stop.distance) stop = candidate;
+        }
+        staticGtfsCache.set(key, stop ?? {});
+      }
+    }
+    for (const row of rows) {
+      const value = staticGtfsCache.get(`${row.train_number}|${row.departure_at}`);
+      row.platform ||= value?.platform;
+      row.track ||= value?.track;
+    }
+  } catch (error) {
+    console.error("static GTFS enrichment failed", error);
   }
 }
 
