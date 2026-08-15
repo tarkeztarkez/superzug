@@ -1,8 +1,10 @@
 import { Ionicons } from "@expo/vector-icons";
 import * as DocumentPicker from "expo-document-picker";
 import * as SecureStore from "expo-secure-store";
+import * as Sharing from "expo-sharing";
 import { StatusBar } from "expo-status-bar";
 import { useEffect, useMemo, useState } from "react";
+import { cacheRemoteState, cachedState, localPdf, queueImport, removeOffline, syncPending } from "./offline";
 import {
   ActivityIndicator,
   Alert,
@@ -46,6 +48,8 @@ type Ticket = {
   codeUrl?: string;
   legs?: JourneyLeg[];
   passengers?: Passenger[];
+  localPdfUri?: string;
+  localCodeUri?: string;
 };
 
 const tokenStore = {
@@ -159,9 +163,14 @@ function Detail({ item, token, back, remove, retry }: { item: Ticket; token: str
   const passengers = item.passengers?.length ? item.passengers : item.seat ? [{ seats: [{ trainNumber: item.train_number, carriage: item.carriage, seat: item.seat }] }] : [];
   const openPdf = async () => {
     try {
+      if (Platform.OS !== "web") {
+        const uri = item.localPdfUri ?? await localPdf(item.id);
+        if (!uri) throw new Error("This PDF has not finished downloading for offline use.");
+        await Sharing.shareAsync(uri, { mimeType: "application/pdf", dialogTitle: "Open train ticket" });
+        return;
+      }
       const blob = await (await request(item.pdfUrl, token)).blob();
-      if (Platform.OS === "web") window.open(URL.createObjectURL(blob), "_blank");
-      else Alert.alert("PDF ready", "The original ticket is securely stored. PDF sharing will be available in the next mobile build.");
+      window.open(URL.createObjectURL(blob), "_blank");
     } catch (error) { Alert.alert("Couldn’t open PDF", (error as Error).message); }
   };
   const confirmDelete = () => {
@@ -238,9 +247,17 @@ export default function App() {
   const load = async (auth = token) => {
     if (!auth) return;
     try {
+      await syncPending(API, auth);
       const [me, list] = await Promise.all([request("/api/me", auth), request("/api/tickets", auth)]);
-      setUser(await me.json()); setTickets(await list.json()); setToken(auth);
-    } catch { await tokenStore.clear(); setToken(""); setUser(null); }
+      const nextUser = await me.json();
+      const nextTickets = await list.json();
+      setUser(nextUser); setTickets(nextTickets); setToken(auth);
+      void cacheRemoteState(API, auth, nextUser, nextTickets);
+    } catch {
+      const cached = await cachedState();
+      if (cached?.user) { setUser(cached.user); setTickets(cached.tickets); setToken(auth); }
+      else { await tokenStore.clear(); setToken(""); setUser(null); }
+    }
     finally { setLoading(false); setRefreshing(false); }
   };
   useEffect(() => { tokenStore.get().then((saved) => saved ? load(saved) : setLoading(false)); }, []);
@@ -282,13 +299,31 @@ export default function App() {
     const picked = await DocumentPicker.getDocumentAsync({ type: "application/pdf", copyToCacheDirectory: true });
     if (picked.canceled) return;
     const asset = picked.assets[0];
-    const form = new FormData();
-    if (Platform.OS === "web") form.append("file", asset.file!);
-    else form.append("file", { uri: asset.uri, name: asset.name, type: asset.mimeType ?? "application/pdf" } as unknown as Blob);
-    try { await request("/api/tickets/import", token, { method: "POST", body: form }); await load(); }
+    try {
+      if (Platform.OS !== "web") {
+        const local = await queueImport(asset.uri, asset.name);
+        if (local) setTickets((current) => [...current, local as Ticket]);
+        await load();
+        return;
+      }
+      const form = new FormData();
+      form.append("file", asset.file!);
+      await request("/api/tickets/import", token, { method: "POST", body: form }); await load();
+    }
     catch (error) { Alert.alert("Couldn’t import ticket", (error as Error).message); }
   };
-  const remove = async () => { if (!selected) return; try { await request(`/api/tickets/${selected.id}`, token, { method: "DELETE" }); back(); await load(); } catch (error) { Alert.alert("Couldn’t delete ticket", (error as Error).message); } };
+  const remove = async () => {
+    if (!selected) return;
+    if (Platform.OS !== "web") {
+      const serverTicket = !selected.id.startsWith("local_");
+      await removeOffline(selected.id, serverTicket);
+      setTickets((current) => current.filter((item) => item.id !== selected.id));
+      back();
+      if (serverTicket) { try { await request(`/api/tickets/${selected.id}`, token, { method: "DELETE" }); } catch {} }
+      return;
+    }
+    try { await request(`/api/tickets/${selected.id}`, token, { method: "DELETE" }); back(); await load(); } catch (error) { Alert.alert("Couldn’t delete ticket", (error as Error).message); }
+  };
   const logout = async () => { await tokenStore.clear(); setToken(""); setUser(null); setTickets([]); };
 
   if (loading) return <View style={styles.loader}><Logo /><ActivityIndicator color={green} /></View>;
