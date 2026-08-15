@@ -147,7 +147,7 @@ async function extractTicket(id: string, pdf: Uint8Array, token?: string) {
       headers: { Authorization: `Bearer ${apiToken}`, "ChatGPT-Account-Id": accountId, "Content-Type": "application/json", Accept: codex ? "text/event-stream" : "application/json", originator: "codex_cli_rs" },
       body: JSON.stringify({
         model: process.env.EXTRACTION_MODEL ?? (codex ? "gpt-5.6-terra" : "gpt-terra-high"),
-        ...(codex ? { instructions: "Extract ticket data exactly. Do not call tools.", tools: [], tool_choice: "auto", parallel_tool_calls: false, reasoning: { effort: "high", summary: "none" }, store: false, stream: true } : {}),
+        ...(codex ? { instructions: "Extract ticket data exactly. Do not call tools.", tools: [], tool_choice: "auto", parallel_tool_calls: false, reasoning: { effort: "high", summary: "concise" }, store: false, stream: true } : {}),
         input: [{ role: "user", content: [
           { type: "input_text", text: "Extract this train ticket. Return only JSON with operator, trainNumber, origin, destination, departureAt, arrivalAt, platform, track, carriage, seat. Dates must be ISO 8601 with timezone. Use null when absent." },
           { type: "input_file", filename: "ticket.pdf", file_data: `data:application/pdf;base64,${Buffer.from(pdf).toString("base64")}` },
