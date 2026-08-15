@@ -85,14 +85,16 @@ async function enrichLive(rows: Record<string, any>[]) {
     }
     for (const row of candidates) {
       const scheduled = new Date(row.departure_at);
-      const number = String(row.train_number).match(/\d+/g)?.join("") ?? "";
-      const trip = liveCache.trips.find((item) => item.start_date === polishDate(scheduled) && item.numbers.some((value) => value.replace(/\D/g, "") === number));
-      if (!trip) continue;
-      const stop = trip.stop_times.map((item) => ({ item, time: new Date(item.departure ?? item.arrival ?? 0) })).filter(({ time }) => Number.isFinite(time.getTime())).sort((a, b) => Math.abs(a.time.getTime() - scheduled.getTime()) - Math.abs(b.time.getTime() - scheduled.getTime()))[0];
+      const numbers: string[] = String(row.train_number).match(/\d+/g) ?? [];
+      const stop = liveCache.trips
+        .filter((item) => item.start_date === polishDate(scheduled) && item.numbers.some((value) => numbers.includes(value.replace(/\D/g, ""))))
+        .flatMap((trip) => trip.stop_times.map((item) => ({ item, time: new Date(item.departure ?? item.arrival ?? 0) })))
+        .filter(({ time }) => Number.isFinite(time.getTime()))
+        .sort((a, b) => Math.abs(a.time.getTime() - scheduled.getTime()) - Math.abs(b.time.getTime() - scheduled.getTime()))[0];
       if (!stop || Math.abs(stop.time.getTime() - scheduled.getTime()) > 6 * 3_600_000) continue;
       row.delay_minutes = Math.max(0, Math.round((stop.time.getTime() - scheduled.getTime()) / 60_000));
-      row.platform = stop.item.platform || row.platform;
-      row.track = stop.item.track || row.track;
+      row.platform ||= stop.item.platform;
+      row.track ||= stop.item.track;
     }
   } catch (error) {
     console.error("live journey enrichment failed", error);
