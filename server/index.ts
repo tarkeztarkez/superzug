@@ -161,6 +161,16 @@ async function enrichStaticGtfs(rows: Record<string, any>[]) {
   }
 }
 
+async function enrichTicketRows(rows: Record<string, any>[]) {
+  await enrichLive(rows);
+  const legs = rows.flatMap((row) => Array.isArray(row.legs) ? row.legs.map((leg: Record<string, any>) => ({ leg, train_number: leg.trainNumber, departure_at: leg.departureAt, arrival_at: leg.arrivalAt, platform: leg.platform, track: leg.track })) : []);
+  await enrichLive(legs);
+  for (const value of legs) {
+    value.leg.platform ||= value.platform;
+    value.leg.track ||= value.track;
+  }
+}
+
 async function cropTicketCode(id: string, pdf: Uint8Array) {
   const directory = await mkdtemp(join(tmpdir(), "superzug-"));
   try {
@@ -289,7 +299,7 @@ async function api(request: Request, url: URL): Promise<Response> {
     const rows = user.is_admin && url.searchParams.get("all") === "true"
       ? await sql`SELECT * FROM tickets ORDER BY departure_at NULLS LAST`
       : await sql`SELECT * FROM tickets WHERE user_id = ${user.id} ORDER BY departure_at NULLS LAST`;
-    await enrichLive(rows);
+    await enrichTicketRows(rows);
     return json(rows.map(ticket));
   }
   if (url.pathname === "/api/tickets/import" && request.method === "POST" && can("tickets:write")) {
