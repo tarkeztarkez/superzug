@@ -1,4 +1,7 @@
 import postgres from "postgres";
+import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 let sql = postgres(process.env.DATABASE_URL!, { max: 10 });
 const encoder = new TextEncoder();
@@ -61,7 +64,38 @@ function ticket(row: Record<string, unknown>) {
   };
 }
 
+async function cropTicketCode(id: string, pdf: Uint8Array) {
+  const directory = await mkdtemp(join(tmpdir(), "superzug-"));
+  try {
+    const source = join(directory, "ticket.pdf");
+    await writeFile(source, pdf);
+    const render = Bun.spawn(["pdftoppm", "-f", "1", "-l", "2", "-r", "220", "-png", source, join(directory, "page")]);
+    if (await render.exited) return;
+    for (const name of (await readdir(directory)).filter((file) => file.endsWith(".png")).sort()) {
+      const page = join(directory, name);
+      const scan = Bun.spawn(["zbarimg", "--xml", "--quiet", page], { stdout: "pipe", stderr: "ignore" });
+      const xml = await new Response(scan.stdout).text();
+      await scan.exited;
+      const points = [...xml.matchAll(/<point\s+x=['"](\d+)['"]\s+y=['"](\d+)['"]\s*\/?\s*>/g)].map((match) => [Number(match[1]), Number(match[2])]);
+      if (points.length < 3) continue;
+      const xs = points.map(([x]) => x), ys = points.map(([, y]) => y);
+      const minX = Math.min(...xs), minY = Math.min(...ys), maxX = Math.max(...xs), maxY = Math.max(...ys);
+      const padding = Math.ceil(Math.max(maxX - minX, maxY - minY) * .08);
+      const output = join(directory, "code.png");
+      const crop = Bun.spawn(["convert", page, "-crop", `${maxX - minX + padding * 2}x${maxY - minY + padding * 2}+${Math.max(0, minX - padding)}+${Math.max(0, minY - padding)}`, "+repage", output], { stderr: "ignore" });
+      if (await crop.exited) continue;
+      await sql`UPDATE tickets SET code_image = ${new Uint8Array(await readFile(output))}, code_content_type = 'image/png', updated_at = now() WHERE id = ${id}`;
+      return;
+    }
+  } catch (error) {
+    console.error("ticket code crop failed", error);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+}
+
 async function extractTicket(id: string, pdf: Uint8Array, token?: string) {
+  void cropTicketCode(id, pdf);
   try {
     let apiToken = token || process.env.OPENAI_API_KEY;
     let accountId = "";
