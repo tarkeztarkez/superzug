@@ -145,7 +145,13 @@ function Detail({ item, token, back, remove, retry }: { item: Ticket; token: str
       else Alert.alert("PDF ready", "The original ticket is securely stored. PDF sharing will be available in the next mobile build.");
     } catch (error) { Alert.alert("Couldn’t open PDF", (error as Error).message); }
   };
-  const confirmDelete = () => Alert.alert("Delete ticket?", "The PDF will also be permanently deleted.", [{ text: "Cancel", style: "cancel" }, { text: "Delete", style: "destructive", onPress: remove }]);
+  const confirmDelete = () => {
+    if (Platform.OS === "web") {
+      if (window.confirm("Delete this ticket and its PDF permanently?")) remove();
+      return;
+    }
+    Alert.alert("Delete ticket?", "The PDF will also be permanently deleted.", [{ text: "Cancel", style: "cancel" }, { text: "Delete", style: "destructive", onPress: remove }]);
+  };
   return (
     <SafeAreaView style={styles.page}><StatusBar style="dark" />
       <View style={styles.detailHeader}><Pressable style={styles.roundButton} onPress={back}><Ionicons name="arrow-back" size={22} color={ink} /></Pressable><Text style={styles.detailHeaderTitle}>Ticket</Text><Pressable style={styles.roundButton} onPress={confirmDelete}><Ionicons name="trash-outline" size={20} color="#9B4A43" /></Pressable></View>
