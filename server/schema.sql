@@ -50,3 +50,15 @@ CREATE TABLE IF NOT EXISTS tickets (
 
 CREATE INDEX IF NOT EXISTS tickets_user_departure_idx ON tickets(user_id, departure_at);
 CREATE INDEX IF NOT EXISTS tickets_expiry_idx ON tickets(arrival_at);
+
+ALTER TABLE tickets ADD COLUMN IF NOT EXISTS legs jsonb NOT NULL DEFAULT '[]'::jsonb;
+ALTER TABLE tickets ADD COLUMN IF NOT EXISTS passengers jsonb NOT NULL DEFAULT '[]'::jsonb;
+
+UPDATE tickets SET legs = jsonb_build_array(jsonb_build_object(
+  'operator', operator, 'trainNumber', train_number, 'origin', origin, 'destination', destination,
+  'departureAt', departure_at, 'arrivalAt', arrival_at, 'platform', platform, 'track', track
+)) WHERE legs = '[]'::jsonb AND origin IS NOT NULL;
+
+UPDATE tickets SET passengers = jsonb_build_array(jsonb_build_object(
+  'name', NULL, 'seats', jsonb_build_array(jsonb_build_object('trainNumber', train_number, 'carriage', carriage, 'seat', seat))
+)) WHERE passengers = '[]'::jsonb AND seat IS NOT NULL;

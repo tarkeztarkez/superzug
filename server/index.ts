@@ -10,6 +10,9 @@ const staticRoot = `${import.meta.dir}/../dist`;
 type Identity = { id: string; email: string; name: string; is_admin: boolean; scopes: string[] };
 type LiveTrip = { start_date: string; numbers: string[]; stop_times: { arrival?: string; departure?: string; platform?: string; track?: string }[] };
 type ExtractedTicket = Record<string, string | null | undefined>;
+type ExtractedLeg = ExtractedTicket & { trainNumber?: string | null };
+type ExtractedPassenger = { name?: string | null; seats?: { trainNumber?: string | null; carriage?: string | null; seat?: string | null }[] };
+type ExtractedDocument = { legs?: ExtractedLeg[]; passengers?: ExtractedPassenger[] };
 
 let liveCache: { expires: number; trips: LiveTrip[] } | null = null;
 let staticGtfsExpires = 0;
@@ -209,7 +212,7 @@ async function extractTicket(id: string, pdf: Uint8Array, token?: string) {
         model: process.env.EXTRACTION_MODEL ?? (codex ? "gpt-5.6-terra" : "gpt-terra-high"),
         ...(codex ? { instructions: "Extract ticket data exactly. Do not call tools.", tools: [], tool_choice: "auto", parallel_tool_calls: false, reasoning: { effort: "high", summary: "concise" }, store: false, stream: true } : {}),
         input: [{ role: "user", content: [
-          { type: "input_text", text: "Extract this train ticket. Return only a JSON object with operator, trainNumber, origin, destination, departureAt, arrivalAt, platform, track, carriage, seat. Dates must be ISO 8601 with timezone. Use null when absent. If the PDF contains multiple journey legs, return a JSON array of those objects in travel order." },
+          { type: "input_text", text: "Extract this train ticket. Return only JSON in this exact shape: {\"legs\":[{\"operator\":string|null,\"trainNumber\":string|null,\"origin\":string,\"destination\":string,\"departureAt\":string,\"arrivalAt\":string,\"platform\":string|null,\"track\":string|null}],\"passengers\":[{\"name\":string|null,\"seats\":[{\"trainNumber\":string|null,\"carriage\":string|null,\"seat\":string|null}]}]}. Include every journey leg in travel order and every passenger, including every separate seat reservation. Dates must be ISO 8601 with timezone. Use null when absent." },
           { type: "input_file", filename: "ticket.pdf", file_data: `data:application/pdf;base64,${Buffer.from(pdf).toString("base64")}` },
         ] }],
       }),
@@ -231,16 +234,19 @@ async function extractTicket(id: string, pdf: Uint8Array, token?: string) {
       const result = JSON.parse(body) as { output_text?: string; output?: { content?: { text?: string }[] }[] };
       raw = result.output_text ?? result.output?.flatMap((item) => item.content ?? []).find((item) => item.text)?.text ?? "{}";
     }
-    const parsed = JSON.parse(raw.replace(/^```json\s*|\s*```$/g, "")) as ExtractedTicket | ExtractedTicket[];
-    const legs = Array.isArray(parsed) ? parsed : [parsed];
+    const parsed = JSON.parse(raw.replace(/^```json\s*|\s*```$/g, "")) as ExtractedTicket | ExtractedTicket[] | ExtractedDocument;
+    const document = !Array.isArray(parsed) && Array.isArray((parsed as ExtractedDocument).legs) ? parsed as ExtractedDocument : null;
+    const legs: ExtractedLeg[] = Array.isArray(parsed) ? parsed : document?.legs ?? [parsed as ExtractedTicket];
+    const passengers: ExtractedPassenger[] = document?.passengers ?? legs.flatMap((leg) => leg.seat ? [{ name: null, seats: [{ trainNumber: leg.trainNumber, carriage: leg.carriage, seat: leg.seat }] }] : []);
     const first = legs[0] ?? {}, last = legs.at(-1) ?? {};
     const joined = (key: string) => [...new Set(legs.map((leg) => leg[key]).filter(Boolean))].join(" + ") || null;
-    const value = { operator: joined("operator"), trainNumber: joined("trainNumber"), origin: first.origin, destination: last.destination, departureAt: first.departureAt, arrivalAt: last.arrivalAt, platform: first.platform, track: first.track, carriage: joined("carriage"), seat: joined("seat") };
+    const reservations = passengers.flatMap((passenger) => passenger.seats ?? []);
+    const value = { operator: joined("operator"), trainNumber: joined("trainNumber"), origin: first.origin, destination: last.destination, departureAt: first.departureAt, arrivalAt: last.arrivalAt, platform: first.platform, track: first.track, carriage: [...new Set(reservations.map((seat) => seat.carriage).filter(Boolean))].join(" + ") || null, seat: [...new Set(reservations.map((seat) => seat.seat).filter(Boolean))].join(" + ") || null };
     if (!value.origin || !value.destination || !value.departureAt || !value.arrivalAt) throw new Error("Model returned incomplete journey data");
     await sql`UPDATE tickets SET
       operator = ${value.operator ?? null}, train_number = ${value.trainNumber ?? null}, origin = ${value.origin ?? null}, destination = ${value.destination ?? null},
       departure_at = ${value.departureAt ?? null}, arrival_at = ${value.arrivalAt ?? null}, platform = ${value.platform ?? null}, track = ${value.track ?? null},
-      carriage = ${value.carriage ?? null}, seat = ${value.seat ?? null}, status = 'ready', updated_at = now() WHERE id = ${id}`;
+      carriage = ${value.carriage ?? null}, seat = ${value.seat ?? null}, legs = ${sql.json(legs)}, passengers = ${sql.json(passengers)}, status = 'ready', updated_at = now() WHERE id = ${id}`;
   } catch (error) {
     console.error("ticket extraction failed", error);
     await sql`UPDATE tickets SET status = 'needs_review', updated_at = now() WHERE id = ${id}`;
