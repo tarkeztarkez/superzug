@@ -53,7 +53,7 @@ export async function cachedState() {
 export async function queueImport(uri: string, fileName: string) {
   const value = await db();
   if (!value) return null;
-  const id = `local_${crypto.randomUUID()}`;
+  const id = `local_${Date.now()}_${Math.random().toString(36).slice(2)}`;
   const fileUri = `${root}${id}.pdf`;
   await FileSystem.copyAsync({ from: uri, to: fileUri });
   const ticket = { id, file_name: fileName, status: "processing", delay_minutes: 0, pdfUrl: "", localPdfUri: fileUri };
