@@ -55,6 +55,8 @@ async function request(path: string, token: string, init?: RequestInit) {
   return response;
 }
 
+const formatTime = (date: Date) => date.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", hour12: false });
+
 function Logo() {
   return (
     <View style={styles.logo}>
@@ -119,9 +121,9 @@ function TicketCard({ item, onPress }: { item: Ticket; onPress: () => void }) {
         {item.delay_minutes > 0 ? <View style={styles.delayPill}><Text style={styles.delayText}>+{item.delay_minutes} min</Text></View> : <View style={styles.onTimePill}><Text style={styles.onTimeText}>On time</Text></View>}
       </View>
       <View style={styles.routeRow}>
-        <View style={styles.timeColumn}><Text style={styles.time}>{departure ? departure.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "—"}</Text><Text style={styles.station} numberOfLines={1}>{item.origin || "Origin"}</Text></View>
+        <View style={styles.timeColumn}><Text style={styles.time}>{departure ? formatTime(departure) : "—"}</Text><Text style={styles.station} numberOfLines={1}>{item.origin || "Origin"}</Text></View>
         <View style={styles.routeLine}><View style={styles.dot} /><View style={styles.line} /><Ionicons name="arrow-forward" size={14} color="#9AA099" /><View style={styles.line} /><View style={[styles.dot, styles.dotOpen]} /></View>
-        <View style={[styles.timeColumn, styles.alignRight]}><Text style={styles.time}>{arrival ? arrival.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "—"}</Text><Text style={[styles.station, styles.textRight]} numberOfLines={1}>{item.destination || "Destination"}</Text></View>
+        <View style={[styles.timeColumn, styles.alignRight]}><Text style={styles.time}>{arrival ? formatTime(arrival) : "—"}</Text><Text style={[styles.station, styles.textRight]} numberOfLines={1}>{item.destination || "Destination"}</Text></View>
       </View>
       <View style={styles.ticketMeta}>
         <Text style={styles.dateText}>{departure?.toLocaleDateString([], { weekday: "short", day: "numeric", month: "short" })}</Text>
@@ -161,8 +163,8 @@ function Detail({ item, token, back, remove, retry }: { item: Ticket; token: str
         <View style={styles.journeyCard}>
           <View style={styles.timeline}><View style={styles.bigDot} /><View style={styles.verticalLine} /><View style={[styles.bigDot, styles.bigDotOpen]} /></View>
           <View style={styles.journeyStops}>
-            <View><Text style={styles.journeyTime}>{departure ? departure.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "—"}</Text><Text style={styles.journeyStation}>{item.origin || "Origin"}</Text></View>
-            <View><Text style={styles.journeyTime}>{arrival ? arrival.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "—"}</Text><Text style={styles.journeyStation}>{item.destination || "Destination"}</Text></View>
+            <View><Text style={styles.journeyTime}>{departure ? formatTime(departure) : "—"}</Text><Text style={styles.journeyStation}>{item.origin || "Origin"}</Text></View>
+            <View><Text style={styles.journeyTime}>{arrival ? formatTime(arrival) : "—"}</Text><Text style={styles.journeyStation}>{item.destination || "Destination"}</Text></View>
           </View>
         </View>
         <View style={styles.infoGrid}>
