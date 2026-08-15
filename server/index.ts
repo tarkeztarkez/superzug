@@ -8,6 +8,9 @@ const encoder = new TextEncoder();
 const staticRoot = `${import.meta.dir}/../dist`;
 
 type Identity = { id: string; email: string; name: string; is_admin: boolean; scopes: string[] };
+type LiveTrip = { start_date: string; numbers: string[]; stop_times: { arrival?: string; departure?: string; platform?: string; track?: string }[] };
+
+let liveCache: { expires: number; trips: LiveTrip[] } | null = null;
 
 const json = (data: unknown, status = 200) => Response.json(data, { status });
 const sha256 = async (value: string) => Buffer.from(await crypto.subtle.digest("SHA-256", encoder.encode(value))).toString("hex");
@@ -63,6 +66,36 @@ function ticket(row: Record<string, unknown>) {
     pdfUrl: `/api/tickets/${row.id}/pdf`,
     codeUrl: row.code_content_type ? `/api/tickets/${row.id}/code` : null,
   };
+}
+
+function polishDate(value: Date) {
+  return new Intl.DateTimeFormat("en-CA", { timeZone: "Europe/Warsaw", year: "numeric", month: "2-digit", day: "2-digit" }).format(value);
+}
+
+async function enrichLive(rows: Record<string, any>[]) {
+  const candidates = rows.filter((row) => row.train_number && row.departure_at && new Date(row.arrival_at ?? row.departure_at).getTime() > Date.now() - 3_600_000);
+  if (!candidates.length) return;
+  try {
+    if (!liveCache || liveCache.expires < Date.now()) {
+      const response = await fetch(process.env.LIVE_UPDATES_URL ?? "https://mkuran.pl/gtfs/polish_trains/updates.json");
+      if (!response.ok) throw new Error(`live updates returned ${response.status}`);
+      const body = await response.json() as { trip_updates: LiveTrip[] };
+      liveCache = { trips: body.trip_updates, expires: Date.now() + 120_000 };
+    }
+    for (const row of candidates) {
+      const scheduled = new Date(row.departure_at);
+      const number = String(row.train_number).match(/\d+/g)?.join("") ?? "";
+      const trip = liveCache.trips.find((item) => item.start_date === polishDate(scheduled) && item.numbers.some((value) => value.replace(/\D/g, "") === number));
+      if (!trip) continue;
+      const stop = trip.stop_times.map((item) => ({ item, time: new Date(item.departure ?? item.arrival ?? 0) })).filter(({ time }) => Number.isFinite(time.getTime())).sort((a, b) => Math.abs(a.time.getTime() - scheduled.getTime()) - Math.abs(b.time.getTime() - scheduled.getTime()))[0];
+      if (!stop || Math.abs(stop.time.getTime() - scheduled.getTime()) > 6 * 3_600_000) continue;
+      row.delay_minutes = Math.max(0, Math.round((stop.time.getTime() - scheduled.getTime()) / 60_000));
+      row.platform = stop.item.platform || row.platform;
+      row.track = stop.item.track || row.track;
+    }
+  } catch (error) {
+    console.error("live journey enrichment failed", error);
+  }
 }
 
 async function cropTicketCode(id: string, pdf: Uint8Array) {
@@ -180,6 +213,7 @@ async function api(request: Request, url: URL): Promise<Response> {
     const rows = user.is_admin && url.searchParams.get("all") === "true"
       ? await sql`SELECT * FROM tickets ORDER BY departure_at NULLS LAST`
       : await sql`SELECT * FROM tickets WHERE user_id = ${user.id} ORDER BY departure_at NULLS LAST`;
+    await enrichLive(rows);
     return json(rows.map(ticket));
   }
   if (url.pathname === "/api/tickets/import" && request.method === "POST" && can("tickets:write")) {

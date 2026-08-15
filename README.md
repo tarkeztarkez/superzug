@@ -10,6 +10,7 @@ DATABASE_URL=postgres://... ADMIN_EMAIL=... ADMIN_PASSWORD=... bun run server
 
 The server creates its schema and first admin on startup. Ticket PDFs and metadata are deleted hourly once the train's arrival was more than seven days ago.
 PDF pages are rendered locally and ZBar crops a detected validation code; AI is only used for ticket-field extraction.
+Live delay, platform, and track values are matched by train number and departure against the public Polish Trains GTFS-realtime JSON feed, with a two-minute server cache.
 
 ## Server environment
 
