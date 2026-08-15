@@ -6,6 +6,7 @@ import { useEffect, useMemo, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
+  BackHandler,
   Linking,
   Platform,
   Pressable,
@@ -226,6 +227,25 @@ export default function App() {
   };
   useEffect(() => { tokenStore.get().then((saved) => saved ? load(saved) : setLoading(false)); }, []);
   useEffect(() => { if (!token || !tickets.some((item) => item.status === "processing")) return; const timer = setInterval(() => load(), 5000); return () => clearInterval(timer); }, [token, tickets]);
+  useEffect(() => {
+    const back = () => {
+      if (selected) { setSelected(null); return true; }
+      if (tab === "settings") { setTab("tickets"); return true; }
+      return false;
+    };
+    if (Platform.OS === "web") {
+      const pop = () => back();
+      window.addEventListener("popstate", pop);
+      return () => window.removeEventListener("popstate", pop);
+    }
+    const subscription = BackHandler.addEventListener("hardwareBackPress", back);
+    return () => subscription.remove();
+  }, [selected, tab]);
+
+  const openTicket = (item: Ticket) => { if (Platform.OS === "web") window.history.pushState({ superzug: "ticket" }, ""); setSelected(item); };
+  const openSettings = () => { if (tab !== "settings" && Platform.OS === "web") window.history.pushState({ superzug: "settings" }, ""); setTab("settings"); };
+  const openTickets = () => { if (tab === "settings" && Platform.OS === "web") window.history.back(); else setTab("tickets"); };
+  const back = () => { if (Platform.OS === "web") window.history.back(); else setSelected(null); };
 
   const groups = useMemo(() => ({ upcoming: tickets.filter((item) => !item.arrival_at || new Date(item.arrival_at) >= new Date()), past: tickets.filter((item) => item.arrival_at && new Date(item.arrival_at) < new Date()) }), [tickets]);
   const importPdf = async () => {
@@ -238,24 +258,24 @@ export default function App() {
     try { await request("/api/tickets/import", token, { method: "POST", body: form }); await load(); }
     catch (error) { Alert.alert("Couldn’t import ticket", (error as Error).message); }
   };
-  const remove = async () => { if (!selected) return; try { await request(`/api/tickets/${selected.id}`, token, { method: "DELETE" }); setSelected(null); await load(); } catch (error) { Alert.alert("Couldn’t delete ticket", (error as Error).message); } };
+  const remove = async () => { if (!selected) return; try { await request(`/api/tickets/${selected.id}`, token, { method: "DELETE" }); back(); await load(); } catch (error) { Alert.alert("Couldn’t delete ticket", (error as Error).message); } };
   const logout = async () => { await tokenStore.clear(); setToken(""); setUser(null); setTickets([]); };
 
   if (loading) return <View style={styles.loader}><Logo /><ActivityIndicator color={green} /></View>;
   if (!user) return <Login onLogin={(value, nextUser) => { setToken(value); setUser(nextUser); load(value); }} />;
-  if (selected) return <Detail item={selected} token={token} back={() => setSelected(null)} remove={remove} retry={async () => { try { await request(`/api/tickets/${selected.id}/retry`, token, { method: "POST" }); setSelected(null); await load(); } catch (error) { Alert.alert("Couldn’t analyse ticket", (error as Error).message); } }} />;
+  if (selected) return <Detail item={selected} token={token} back={back} remove={remove} retry={async () => { try { await request(`/api/tickets/${selected.id}/retry`, token, { method: "POST" }); back(); await load(); } catch (error) { Alert.alert("Couldn’t analyse ticket", (error as Error).message); } }} />;
 
   return <SafeAreaView style={styles.page}><StatusBar style="dark" />
     <View style={[styles.shell, wide && styles.shellWide]}>
-      {wide && <View style={styles.sidebar}><Logo /><Pressable style={[styles.sideItem, tab === "tickets" && styles.sideItemActive]} onPress={() => setTab("tickets")}><Ionicons name="ticket-outline" size={20} color={tab === "tickets" ? green : ink} /><Text style={styles.sideText}>My tickets</Text></Pressable><Pressable style={[styles.sideItem, tab === "settings" && styles.sideItemActive]} onPress={() => setTab("settings")}><Ionicons name="settings-outline" size={20} color={tab === "settings" ? green : ink} /><Text style={styles.sideText}>Settings</Text></Pressable></View>}
+      {wide && <View style={styles.sidebar}><Logo /><Pressable style={[styles.sideItem, tab === "tickets" && styles.sideItemActive]} onPress={openTickets}><Ionicons name="ticket-outline" size={20} color={tab === "tickets" ? green : ink} /><Text style={styles.sideText}>My tickets</Text></Pressable><Pressable style={[styles.sideItem, tab === "settings" && styles.sideItemActive]} onPress={openSettings}><Ionicons name="settings-outline" size={20} color={tab === "settings" ? green : ink} /><Text style={styles.sideText}>Settings</Text></Pressable></View>}
       <View style={styles.main}>
         {tab === "tickets" ? <ScrollView refreshControl={<RefreshControl refreshing={refreshing} tintColor={green} onRefresh={() => { setRefreshing(true); load(); }} />} contentContainerStyle={styles.listBody}>
-          <View style={styles.topBar}>{!wide && <Logo />}<View style={styles.topActions}><Pressable style={styles.avatarSmall} onPress={() => setTab("settings")}><Text style={styles.avatarSmallText}>{user.name.slice(0, 1).toUpperCase()}</Text></Pressable></View></View>
+          <View style={styles.topBar}>{!wide && <Logo />}<View style={styles.topActions}><Pressable style={styles.avatarSmall} onPress={openSettings}><Text style={styles.avatarSmallText}>{user.name.slice(0, 1).toUpperCase()}</Text></Pressable></View></View>
           <View style={styles.heroRow}><View><Text style={styles.eyebrow}>GOOD TO SEE YOU, {user.name.split(" ")[0].toUpperCase()}</Text><Text style={styles.screenTitle}>Where to next?</Text></View><Pressable style={styles.addButton} onPress={importPdf}><Ionicons name="add" size={21} color="#fff" /><Text style={styles.addButtonText}>Add ticket</Text></Pressable></View>
-          {groups.upcoming.length ? <><Text style={styles.sectionLabel}>UPCOMING</Text><View style={wide ? styles.cardGrid : undefined}>{groups.upcoming.map((item) => <View key={item.id} style={wide ? styles.gridItem : undefined}><TicketCard item={item} onPress={() => setSelected(item)} /></View>)}</View></> : <View style={styles.empty}><View style={styles.emptyIcon}><Ionicons name="ticket-outline" size={38} color={green} /></View><Text style={styles.emptyTitle}>No journeys yet</Text><Text style={styles.emptyCopy}>Add a train ticket PDF and we’ll organise the useful bits for you.</Text><Pressable style={styles.primaryButtonSmall} onPress={importPdf}><Text style={styles.primaryButtonText}>Choose a PDF</Text></Pressable></View>}
-          {groups.past.length > 0 && <><Text style={styles.sectionLabel}>RECENT JOURNEYS</Text>{groups.past.map((item) => <TicketCard key={item.id} item={item} onPress={() => setSelected(item)} />)}</>}
+          {groups.upcoming.length ? <><Text style={styles.sectionLabel}>UPCOMING</Text><View style={wide ? styles.cardGrid : undefined}>{groups.upcoming.map((item) => <View key={item.id} style={wide ? styles.gridItem : undefined}><TicketCard item={item} onPress={() => openTicket(item)} /></View>)}</View></> : <View style={styles.empty}><View style={styles.emptyIcon}><Ionicons name="ticket-outline" size={38} color={green} /></View><Text style={styles.emptyTitle}>No journeys yet</Text><Text style={styles.emptyCopy}>Add a train ticket PDF and we’ll organise the useful bits for you.</Text><Pressable style={styles.primaryButtonSmall} onPress={importPdf}><Text style={styles.primaryButtonText}>Choose a PDF</Text></Pressable></View>}
+          {groups.past.length > 0 && <><Text style={styles.sectionLabel}>RECENT JOURNEYS</Text>{groups.past.map((item) => <TicketCard key={item.id} item={item} onPress={() => openTicket(item)} />)}</>}
         </ScrollView> : <Settings user={user} token={token} logout={logout} />}
-        {!wide && <View style={styles.bottomNav}><Pressable style={styles.navItem} onPress={() => setTab("tickets")}><Ionicons name={tab === "tickets" ? "ticket" : "ticket-outline"} size={22} color={tab === "tickets" ? green : "#777D78"} /><Text style={[styles.navText, tab === "tickets" && styles.navTextActive]}>Tickets</Text></Pressable><Pressable style={styles.navItem} onPress={() => setTab("settings")}><Ionicons name={tab === "settings" ? "settings" : "settings-outline"} size={22} color={tab === "settings" ? green : "#777D78"} /><Text style={[styles.navText, tab === "settings" && styles.navTextActive]}>Settings</Text></Pressable></View>}
+        {!wide && <View style={styles.bottomNav}><Pressable style={styles.navItem} onPress={openTickets}><Ionicons name={tab === "tickets" ? "ticket" : "ticket-outline"} size={22} color={tab === "tickets" ? green : "#777D78"} /><Text style={[styles.navText, tab === "tickets" && styles.navTextActive]}>Tickets</Text></Pressable><Pressable style={styles.navItem} onPress={openSettings}><Ionicons name={tab === "settings" ? "settings" : "settings-outline"} size={22} color={tab === "settings" ? green : "#777D78"} /><Text style={[styles.navText, tab === "settings" && styles.navTextActive]}>Settings</Text></Pressable></View>}
       </View>
     </View>
   </SafeAreaView>;
