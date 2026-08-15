@@ -9,6 +9,7 @@ const staticRoot = `${import.meta.dir}/../dist`;
 
 type Identity = { id: string; email: string; name: string; is_admin: boolean; scopes: string[] };
 type LiveTrip = { start_date: string; numbers: string[]; stop_times: { arrival?: string; departure?: string; platform?: string; track?: string }[] };
+type ExtractedTicket = Record<string, string | null | undefined>;
 
 let liveCache: { expires: number; trips: LiveTrip[] } | null = null;
 
@@ -149,7 +150,7 @@ async function extractTicket(id: string, pdf: Uint8Array, token?: string) {
         model: process.env.EXTRACTION_MODEL ?? (codex ? "gpt-5.6-terra" : "gpt-terra-high"),
         ...(codex ? { instructions: "Extract ticket data exactly. Do not call tools.", tools: [], tool_choice: "auto", parallel_tool_calls: false, reasoning: { effort: "high", summary: "concise" }, store: false, stream: true } : {}),
         input: [{ role: "user", content: [
-          { type: "input_text", text: "Extract this train ticket. Return only JSON with operator, trainNumber, origin, destination, departureAt, arrivalAt, platform, track, carriage, seat. Dates must be ISO 8601 with timezone. Use null when absent." },
+          { type: "input_text", text: "Extract this train ticket. Return only a JSON object with operator, trainNumber, origin, destination, departureAt, arrivalAt, platform, track, carriage, seat. Dates must be ISO 8601 with timezone. Use null when absent. If the PDF contains multiple journey legs, return a JSON array of those objects in travel order." },
           { type: "input_file", filename: "ticket.pdf", file_data: `data:application/pdf;base64,${Buffer.from(pdf).toString("base64")}` },
         ] }],
       }),
@@ -158,15 +159,25 @@ async function extractTicket(id: string, pdf: Uint8Array, token?: string) {
     const body = await response.text();
     let raw = "{}";
     if (codex) {
+      raw = "";
       for (const line of body.split("\n")) {
         if (!line.startsWith("data:")) continue;
-        try { const event = JSON.parse(line.slice(5)); if (event.type === "response.output_text.done") raw = event.text; } catch {}
+        try {
+          const event = JSON.parse(line.slice(5));
+          if (event.type === "response.output_text.delta") raw += event.delta ?? "";
+          if (event.type === "response.output_text.done" && event.text) raw = event.text;
+        } catch {}
       }
     } else {
       const result = JSON.parse(body) as { output_text?: string; output?: { content?: { text?: string }[] }[] };
       raw = result.output_text ?? result.output?.flatMap((item) => item.content ?? []).find((item) => item.text)?.text ?? "{}";
     }
-    const value = JSON.parse(raw.replace(/^```json\s*|\s*```$/g, ""));
+    const parsed = JSON.parse(raw.replace(/^```json\s*|\s*```$/g, "")) as ExtractedTicket | ExtractedTicket[];
+    const legs = Array.isArray(parsed) ? parsed : [parsed];
+    const first = legs[0] ?? {}, last = legs.at(-1) ?? {};
+    const joined = (key: string) => [...new Set(legs.map((leg) => leg[key]).filter(Boolean))].join(" + ") || null;
+    const value = { operator: joined("operator"), trainNumber: joined("trainNumber"), origin: first.origin, destination: last.destination, departureAt: first.departureAt, arrivalAt: last.arrivalAt, platform: first.platform, track: first.track, carriage: joined("carriage"), seat: joined("seat") };
+    if (!value.origin || !value.destination || !value.departureAt || !value.arrivalAt) throw new Error("Model returned incomplete journey data");
     await sql`UPDATE tickets SET
       operator = ${value.operator ?? null}, train_number = ${value.trainNumber ?? null}, origin = ${value.origin ?? null}, destination = ${value.destination ?? null},
       departure_at = ${value.departureAt ?? null}, arrival_at = ${value.arrivalAt ?? null}, platform = ${value.platform ?? null}, track = ${value.track ?? null},
