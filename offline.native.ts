@@ -102,3 +102,15 @@ export async function localPdf(id: string) {
   const row = await value.getFirstAsync<{ value: string }>("SELECT value FROM tickets WHERE id=?", id);
   return row ? JSON.parse(row.value).localPdfUri ?? null : null;
 }
+
+export async function ensurePdf(api: string, token: string, ticket: Record<string, any>) {
+  const value = await db();
+  if (!value) return null;
+  const existing = await localPdf(ticket.id);
+  if (existing && (await FileSystem.getInfoAsync(existing)).exists) return existing;
+  const uri = await download(`${api}${ticket.pdfUrl}`, `${root}${ticket.id}.pdf`, token);
+  if (!uri) return null;
+  const row = await value.getFirstAsync<{ value: string }>("SELECT value FROM tickets WHERE id=?", ticket.id);
+  await value.runAsync("INSERT OR REPLACE INTO tickets(id,value) VALUES(?,?)", ticket.id, JSON.stringify({ ...(row ? JSON.parse(row.value) : ticket), localPdfUri: uri }));
+  return uri;
+}

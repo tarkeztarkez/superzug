@@ -1,10 +1,10 @@
 import { Ionicons } from "@expo/vector-icons";
 import * as DocumentPicker from "expo-document-picker";
 import * as SecureStore from "expo-secure-store";
-import * as Sharing from "expo-sharing";
 import { StatusBar } from "expo-status-bar";
 import { useEffect, useMemo, useState } from "react";
-import { cacheRemoteState, cachedState, localPdf, queueImport, removeOffline, syncPending } from "./offline";
+import PdfViewer from "./PdfViewer";
+import { cacheRemoteState, cachedState, ensurePdf, queueImport, removeOffline, syncPending } from "./offline";
 import {
   ActivityIndicator,
   Alert,
@@ -156,6 +156,7 @@ function TicketCard({ item, onPress }: { item: Ticket; onPress: () => void }) {
 }
 
 function Detail({ item, token, back, remove, retry }: { item: Ticket; token: string; back: () => void; remove: () => void; retry: () => void }) {
+  const [pdfUri, setPdfUri] = useState<string | null>(null);
   const departure = item.departure_at && new Date(item.departure_at);
   const arrival = item.arrival_at && new Date(item.arrival_at);
   const legs = item.legs?.length ? item.legs : [{ trainNumber: item.train_number, origin: item.origin, destination: item.destination, departureAt: item.departure_at, arrivalAt: item.arrival_at, platform: item.platform, track: item.track }];
@@ -163,9 +164,9 @@ function Detail({ item, token, back, remove, retry }: { item: Ticket; token: str
   const openPdf = async () => {
     try {
       if (Platform.OS !== "web") {
-        const uri = item.localPdfUri ?? await localPdf(item.id);
+        const uri = item.localPdfUri ?? await ensurePdf(API, token, item);
         if (!uri) throw new Error("This PDF has not finished downloading for offline use.");
-        await Sharing.shareAsync(uri, { mimeType: "application/pdf", dialogTitle: "Open train ticket" });
+        setPdfUri(uri);
         return;
       }
       const blob = await (await request(item.pdfUrl, token)).blob();
@@ -179,6 +180,7 @@ function Detail({ item, token, back, remove, retry }: { item: Ticket; token: str
     }
     Alert.alert("Delete ticket?", "The PDF will also be permanently deleted.", [{ text: "Cancel", style: "cancel" }, { text: "Delete", style: "destructive", onPress: remove }]);
   };
+  if (pdfUri) return <PdfViewer uri={pdfUri} onClose={() => setPdfUri(null)} />;
   return (
     <SafeAreaView style={styles.page}><StatusBar style="dark" />
       <View style={styles.detailHeader}><Pressable style={styles.roundButton} onPress={back}><Ionicons name="arrow-back" size={22} color={ink} /></Pressable><Text style={styles.detailHeaderTitle}>Ticket</Text><Pressable style={styles.roundButton} onPress={confirmDelete}><Ionicons name="trash-outline" size={20} color="#9B4A43" /></Pressable></View>
