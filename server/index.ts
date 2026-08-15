@@ -236,9 +236,9 @@ async function api(request: Request, url: URL): Promise<Response> {
     if (request.method === "PATCH" && can("tickets:write")) {
       const body = await request.json() as Record<string, string | number | null>;
       const [updated] = await sql`UPDATE tickets SET
-        train_number = COALESCE(${body.trainNumber}, train_number), origin = COALESCE(${body.origin}, origin), destination = COALESCE(${body.destination}, destination),
-        departure_at = COALESCE(${body.departureAt}, departure_at), arrival_at = COALESCE(${body.arrivalAt}, arrival_at), platform = COALESCE(${body.platform}, platform),
-        track = COALESCE(${body.track}, track), carriage = COALESCE(${body.carriage}, carriage), seat = COALESCE(${body.seat}, seat),
+        train_number = COALESCE(${body.trainNumber ?? null}, train_number), origin = COALESCE(${body.origin ?? null}, origin), destination = COALESCE(${body.destination ?? null}, destination),
+        departure_at = COALESCE(${body.departureAt ?? null}, departure_at), arrival_at = COALESCE(${body.arrivalAt ?? null}, arrival_at), platform = COALESCE(${body.platform ?? null}, platform),
+        track = COALESCE(${body.track ?? null}, track), carriage = COALESCE(${body.carriage ?? null}, carriage), seat = COALESCE(${body.seat ?? null}, seat),
         status = 'ready', updated_at = now() WHERE id = ${row.id} RETURNING *`;
       return json(ticket(updated));
     }
