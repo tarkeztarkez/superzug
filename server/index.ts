@@ -168,9 +168,9 @@ async function extractTicket(id: string, pdf: Uint8Array, token?: string) {
     }
     const value = JSON.parse(raw.replace(/^```json\s*|\s*```$/g, ""));
     await sql`UPDATE tickets SET
-      operator = ${value.operator}, train_number = ${value.trainNumber}, origin = ${value.origin}, destination = ${value.destination},
-      departure_at = ${value.departureAt}, arrival_at = ${value.arrivalAt}, platform = ${value.platform}, track = ${value.track},
-      carriage = ${value.carriage}, seat = ${value.seat}, status = 'ready', updated_at = now() WHERE id = ${id}`;
+      operator = ${value.operator ?? null}, train_number = ${value.trainNumber ?? null}, origin = ${value.origin ?? null}, destination = ${value.destination ?? null},
+      departure_at = ${value.departureAt ?? null}, arrival_at = ${value.arrivalAt ?? null}, platform = ${value.platform ?? null}, track = ${value.track ?? null},
+      carriage = ${value.carriage ?? null}, seat = ${value.seat ?? null}, status = 'ready', updated_at = now() WHERE id = ${id}`;
   } catch (error) {
     console.error("ticket extraction failed", error);
     await sql`UPDATE tickets SET status = 'needs_review', updated_at = now() WHERE id = ${id}`;
@@ -226,12 +226,17 @@ async function api(request: Request, url: URL): Promise<Response> {
     return json(ticket(created), 202);
   }
 
-  const match = url.pathname.match(/^\/api\/tickets\/([0-9a-f-]+)(?:\/(pdf|code))?$/);
+  const match = url.pathname.match(/^\/api\/tickets\/([0-9a-f-]+)(?:\/(pdf|code|retry))?$/);
   if (match) {
     const [row] = await sql`SELECT * FROM tickets WHERE id = ${match[1]} AND (${user.is_admin} OR user_id = ${user.id})`;
     if (!row) return json({ error: "Not found" }, 404);
     if (request.method === "GET" && match[2] === "pdf" && can("tickets:read")) return new Response(row.pdf, { headers: { "Content-Type": "application/pdf", "Content-Disposition": `inline; filename="${row.file_name.replaceAll('"', '')}"` } });
     if (request.method === "GET" && match[2] === "code" && row.code_image && can("tickets:read")) return new Response(row.code_image, { headers: { "Content-Type": row.code_content_type } });
+    if (request.method === "POST" && match[2] === "retry" && can("tickets:write")) {
+      await sql`UPDATE tickets SET status = 'processing', updated_at = now() WHERE id = ${row.id}`;
+      void extractTicket(row.id, row.pdf, request.headers.get("x-sub-auth-token") ?? undefined);
+      return json({ status: "processing" }, 202);
+    }
     if (request.method === "DELETE" && can("tickets:delete")) { await sql`DELETE FROM tickets WHERE id = ${row.id}`; return new Response(null, { status: 204 }); }
     if (request.method === "PATCH" && can("tickets:write")) {
       const body = await request.json() as Record<string, string | number | null>;

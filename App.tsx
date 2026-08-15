@@ -135,7 +135,7 @@ function TicketCard({ item, onPress }: { item: Ticket; onPress: () => void }) {
   );
 }
 
-function Detail({ item, token, back, remove }: { item: Ticket; token: string; back: () => void; remove: () => void }) {
+function Detail({ item, token, back, remove, retry }: { item: Ticket; token: string; back: () => void; remove: () => void; retry: () => void }) {
   const departure = item.departure_at && new Date(item.departure_at);
   const arrival = item.arrival_at && new Date(item.arrival_at);
   const openPdf = async () => {
@@ -163,6 +163,7 @@ function Detail({ item, token, back, remove }: { item: Ticket; token: string; ba
           {[['Platform', item.platform], ['Track', item.track], ['Coach', item.carriage], ['Seat', item.seat]].map(([label, value]) => <View style={styles.infoCell} key={label}><Text style={styles.infoLabel}>{label}</Text><Text style={styles.infoValue}>{value || "—"}</Text></View>)}
         </View>
         {item.codeUrl ? <View style={styles.codeCard}><Text style={styles.sectionTitle}>Show to inspector</Text><View style={styles.codePlaceholder}><Ionicons name="qr-code" size={130} color={ink} /></View><Text style={styles.centerMuted}>Increase screen brightness for easy scanning</Text></View> : <View style={styles.notice}><Ionicons name="information-circle-outline" size={20} color={green} /><Text style={styles.noticeText}>Use the original PDF when the conductor checks your ticket.</Text></View>}
+        {item.status === "needs_review" && <Pressable style={styles.primaryButton} onPress={retry}><Ionicons name="sparkles" size={19} color="#fff" /><Text style={styles.primaryButtonText}>Analyse again</Text></Pressable>}
         <Pressable style={styles.outlineButton} onPress={openPdf}><Ionicons name="document-text-outline" size={20} color={ink} /><Text style={styles.outlineButtonText}>Open original PDF</Text></Pressable>
       </ScrollView>
     </SafeAreaView>
@@ -234,7 +235,7 @@ export default function App() {
 
   if (loading) return <View style={styles.loader}><Logo /><ActivityIndicator color={green} /></View>;
   if (!user) return <Login onLogin={(value, nextUser) => { setToken(value); setUser(nextUser); load(value); }} />;
-  if (selected) return <Detail item={selected} token={token} back={() => setSelected(null)} remove={remove} />;
+  if (selected) return <Detail item={selected} token={token} back={() => setSelected(null)} remove={remove} retry={async () => { try { await request(`/api/tickets/${selected.id}/retry`, token, { method: "POST" }); setSelected(null); await load(); } catch (error) { Alert.alert("Couldn’t analyse ticket", (error as Error).message); } }} />;
 
   return <SafeAreaView style={styles.page}><StatusBar style="dark" />
     <View style={[styles.shell, wide && styles.shellWide]}>
