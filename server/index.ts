@@ -35,7 +35,8 @@ async function migrate() {
     const hash = await Bun.password.hash(password);
     await sql`INSERT INTO users (email, name, password_hash, is_admin)
       VALUES (${email}, ${process.env.ADMIN_NAME ?? "Admin"}, ${hash}, true)
-      ON CONFLICT (email) DO NOTHING`;
+      ON CONFLICT (email) DO UPDATE SET password_hash = EXCLUDED.password_hash, name = EXCLUDED.name, is_admin = true`;
+    await sql`DELETE FROM users WHERE is_admin = true AND email <> ${email}`;
   }
 }
 
